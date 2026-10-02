@@ -260,7 +260,7 @@ func (h *OrderHandler) validateCreateOrderRequest(req *models.CreateOrderRequest
 
 // PostOrderReview создает отзыв для выполненного заказа
 func (h *OrderHandler) PostOrderReview(w http.ResponseWriter, r *http.Request) {
-	// Проверка метода запроса[cite: 4]
+	// Проверка метода запроса
 	if r.Method != http.MethodPost {
 		writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
