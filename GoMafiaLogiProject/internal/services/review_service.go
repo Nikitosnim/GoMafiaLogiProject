@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"delivery-system/internal/models"
 
@@ -31,7 +32,7 @@ func (s *OrderService) CreateOrderReview(ctx context.Context, orderID uuid.UUID,
 	defer tx.Rollback()
 
 	// Проверяем статус заказа и получаем courier_id
-	var courierID sql.NullInt64
+	var courierID uuid.NullUUID
 	var orderStatus string
 	queryOrder := `SELECT courier_id, status FROM orders WHERE id = $1 FOR UPDATE`
 	err = tx.QueryRowContext(ctx, queryOrder, orderID).Scan(&courierID, &orderStatus)
@@ -51,16 +52,21 @@ func (s *OrderService) CreateOrderReview(ctx context.Context, orderID uuid.UUID,
 	}
 
 	// Создаем отзыв
-	var review models.Review
+	var review models.Review = models.Review{ID: uuid.New()}
 	queryReview := `
-		INSERT INTO reviews (order_id, courier_id, rating, comment, created_at)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO reviews (id, order_id, courier_id, rating, comment, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
 		RETURNING id, order_id, courier_id, rating, comment, created_at
 	`
-	err = tx.QueryRowContext(ctx, queryReview, orderID, int(courierID.Int64), req.Rating, req.Comment).
+	err = tx.QueryRowContext(ctx, queryReview, review.ID, orderID, courierID.UUID, req.Rating, req.Comment).
 		Scan(&review.ID, &review.OrderID, &review.CourierID, &review.Rating, &review.Comment, &review.CreatedAt)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrReviewAlreadyExists, err)
+
+		if strings.Contains(err.Error(), "SQLSTATE 23505") || strings.Contains(err.Error(), "unique constraint") {
+			return nil, fmt.Errorf("%w: %v", ErrReviewAlreadyExists, err)
+		}
+
+		return nil, fmt.Errorf("%s: %v", "failed to insert review", err)
 	}
 
 	// Пересчитываем средний рейтинг курьера
@@ -72,7 +78,7 @@ func (s *OrderService) CreateOrderReview(ctx context.Context, orderID uuid.UUID,
 			updated_at = NOW()
 		WHERE id = $2
 	`
-	_, err = tx.ExecContext(ctx, queryRecalc, req.Rating, courierID.Int64)
+	_, err = tx.ExecContext(ctx, queryRecalc, req.Rating, courierID.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update courier rating: %w", err)
 	}

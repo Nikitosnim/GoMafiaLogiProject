@@ -7,7 +7,7 @@ import (
 )
 
 type Review struct {
-	ID        int       `json:"id" db:"id"`
+	ID        uuid.UUID `json:"id" db:"id"`
 	OrderID   uuid.UUID `json:"order_id" db:"order_id"`
 	CourierID uuid.UUID `json:"courier_id" db:"courier_id"`
 	Rating    int       `json:"rating" db:"rating"`

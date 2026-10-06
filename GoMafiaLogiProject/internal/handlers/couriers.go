@@ -225,7 +225,25 @@ func (h *CourierHandler) GetAvailableCouriers(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	couriers, err := h.courierService.GetAvailableCouriers(r.Context())
+	//получаем минимальный рейтинг
+	query := r.URL.Query()
+
+	var minRating float64
+	minRatingStr := query.Get("min_rating")
+	if minRatingStr == "" {
+		minRatingStr = query.Get("minRating")
+	}
+
+	if minRatingStr != "" {
+		parsedRating, err := strconv.ParseFloat(minRatingStr, 64)
+		if err != nil || parsedRating < 0 || parsedRating > 5 {
+			writeErrorResponse(w, http.StatusBadRequest, "Invalid min_rating parameter: must be a number between 0 and 5")
+			return
+		}
+		minRating = parsedRating
+	}
+
+	couriers, err := h.courierService.GetAvailableCouriers(r.Context(), minRating)
 	if err != nil {
 		h.log.WithError(err).Error("Failed to get available couriers")
 		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get available couriers")

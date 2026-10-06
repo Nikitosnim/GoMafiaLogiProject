@@ -228,6 +228,58 @@ func (h *OrderHandler) GetOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, http.StatusOK, orders)
 }
 
+// PostOrderReview создает отзыв для выполненного заказа
+func (h *OrderHandler) PostOrderReview(w http.ResponseWriter, r *http.Request) {
+	// Проверка метода запроса
+	if r.Method != http.MethodPost {
+		writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	orderID, err := extractUUIDFromPath(r.URL.Path, "/api/orders/")
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid order ID")
+		return
+	}
+
+	var req models.CreateReviewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	review, err := h.orderService.CreateOrderReview(r.Context(), orderID, req)
+	if err != nil {
+		h.log.WithError(err).Error("Failed to create order review")
+
+		if strings.Contains(err.Error(), "not found") {
+			writeErrorResponse(w, http.StatusNotFound, "Order not found")
+		} else if strings.Contains(err.Error(), "rating must be between 1 and 5") {
+			writeErrorResponse(w, http.StatusBadRequest, "Invalid rating")
+		} else if strings.Contains(err.Error(), "review for this order already exists") {
+			writeErrorResponse(w, http.StatusConflict, "Review for this order already exists")
+		} else if strings.Contains(err.Error(), "not delivered") {
+			writeErrorResponse(w, http.StatusConflict, "Order is not delivered yet")
+		} else {
+			writeErrorResponse(w, http.StatusInternalServerError, "Failed to create order review")
+		}
+		return
+	}
+
+	// сброс кеша
+	if review != nil && review.CourierID != uuid.Nil {
+		courierCaheKey := redis.GenerateKey(redis.KeyPrefixCourier, review.CourierID.String())
+		err := h.redisClient.Delete(r.Context(), courierCaheKey)
+		if err != nil {
+			h.log.WithError(err).WithField("courier_id", review.CourierID).Error("Failed to invalidate courier cache")
+		}
+	}
+
+	h.log.WithField("order_id", orderID).Info("Order review created successfully")
+
+	writeJSONResponse(w, http.StatusCreated, review)
+}
+
 // validateCreateOrderRequest валидирует запрос на создание заказа
 func (h *OrderHandler) validateCreateOrderRequest(req *models.CreateOrderRequest) error {
 	if req.CustomerName == "" {
@@ -256,43 +308,4 @@ func (h *OrderHandler) validateCreateOrderRequest(req *models.CreateOrderRequest
 	}
 
 	return nil
-}
-
-// PostOrderReview создает отзыв для выполненного заказа
-func (h *OrderHandler) PostOrderReview(w http.ResponseWriter, r *http.Request) {
-	// Проверка метода запроса
-	if r.Method != http.MethodPost {
-		writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	orderID, err := extractUUIDFromPath(r.URL.Path, "/api/orders/")
-	if err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "Invalid order ID")
-		return
-	}
-
-	var req models.CreateReviewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
-
-	review, err := h.orderService.CreateOrderReview(r.Context(), orderID, req)
-	if err != nil {
-		h.log.WithError(err).Error("Failed to create order review")
-		
-		if strings.Contains(err.Error(), "not found") {
-			writeErrorResponse(w, http.StatusNotFound, "Order not found")
-		} else if strings.Contains(err.Error(), "not delivered") {
-			writeErrorResponse(w, http.StatusConflict, "Order is not delivered yet")
-		} else {
-			writeErrorResponse(w, http.StatusInternalServerError, "Failed to create order review")
-		}
-		return
-	}
-
-	h.log.WithField("order_id", orderID).Info("Order review created successfully")
-	
-	writeJSONResponse(w, http.StatusCreated, review)
 }

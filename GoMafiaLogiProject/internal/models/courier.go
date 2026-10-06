@@ -26,7 +26,7 @@ type Courier struct {
 	CreatedAt    time.Time     `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time     `json:"updated_at" db:"updated_at"`
 	LastSeenAt   *time.Time    `json:"last_seen_at,omitempty" db:"last_seen_at"`
-	Rating       float32       `json:"rating" db:"rating"`
+	Rating       float64       `json:"rating" db:"rating"`
 	TotalReviews int           `json:"total_reviews" db:"total_reviews"`
 }
 

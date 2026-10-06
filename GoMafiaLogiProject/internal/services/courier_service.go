@@ -64,7 +64,7 @@ func (s *CourierService) GetCourier(courierID uuid.UUID) (*models.Courier, error
 
 	query := `
 		SELECT id, name, phone, status, current_lat, current_lon, 
-		       created_at, updated_at, last_seen_at
+		       created_at, updated_at, last_seen_at, rating, total_reviews
 		FROM couriers 
 		WHERE id = $1
 	`
@@ -72,7 +72,7 @@ func (s *CourierService) GetCourier(courierID uuid.UUID) (*models.Courier, error
 	err := s.db.QueryRow(query, courierID).Scan(
 		&courier.ID, &courier.Name, &courier.Phone, &courier.Status,
 		&courier.CurrentLat, &courier.CurrentLon, &courier.CreatedAt,
-		&courier.UpdatedAt, &courier.LastSeenAt,
+		&courier.UpdatedAt, &courier.LastSeenAt, &courier.Rating, &courier.TotalReviews,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -121,7 +121,7 @@ func (s *CourierService) UpdateCourierStatus(courierID uuid.UUID, req *models.Up
 func (s *CourierService) GetCouriers(status *models.CourierStatus, limit, offset int) ([]*models.Courier, error) {
 	query := `
 		SELECT id, name, phone, status, current_lat, current_lon, 
-		       created_at, updated_at, last_seen_at
+		       created_at, updated_at, last_seen_at, rating, total_reviews 
 		FROM couriers 
 		WHERE 1=1
 	`
@@ -156,26 +156,34 @@ func (s *CourierService) GetCouriers(status *models.CourierStatus, limit, offset
 	var couriers []*models.Courier
 	for rows.Next() {
 		courier := &models.Courier{}
-		if err := rows.Scan(&courier.ID, &courier.Name, &courier.Phone, &courier.Status,
+
+		err := rows.Scan(&courier.ID, &courier.Name, &courier.Phone, &courier.Status,
 			&courier.CurrentLat, &courier.CurrentLon, &courier.CreatedAt,
-			&courier.UpdatedAt, &courier.LastSeenAt); err != nil {
+			&courier.UpdatedAt, &courier.LastSeenAt, &courier.Rating, &courier.TotalReviews)
+		if err != nil {
 			return nil, fmt.Errorf("failed to scan courier: %w", err)
 		}
 		couriers = append(couriers, courier)
 	}
 
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
 	return couriers, nil
 }
 
 // GetAvailableCouriers возвращает свободных курьеров с фильтрацией по минимальному рейтингу
-func (s *CourierService) GetAvailableCouriers(ctx context.Context) ([]models.Courier, error) {
+func (s *CourierService) GetAvailableCouriers(ctx context.Context, minRating float64) ([]models.Courier, error) {
 	query := `
-		SELECT id, name, phone, status, rating, total_reviews, created_at, updated_at
+		SELECT id, name, phone, status, rating, total_reviews, created_at, updated_at,
+			current_lat, current_lon, last_seen_at 
 		FROM couriers
-		WHERE status = 'available'
+		WHERE status = 'available' AND rating >= $1
 		ORDER BY rating DESC, total_reviews DESC
+		LIMIT 50
 	`
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx, query, minRating)
 	if err != nil {
 		return nil, err
 	}
@@ -184,10 +192,17 @@ func (s *CourierService) GetAvailableCouriers(ctx context.Context) ([]models.Cou
 	couriers := make([]models.Courier, 0)
 	for rows.Next() {
 		var c models.Courier
-		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.Status, &c.Rating, &c.TotalReviews, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Phone, &c.Status, &c.Rating, &c.TotalReviews,
+			 &c.CreatedAt, &c.UpdatedAt, &c.CurrentLat, &c.CurrentLon, &c.LastSeenAt);
+			  err != nil {
 			return nil, err
 		}
 		couriers = append(couriers, c)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
 	return couriers, nil
