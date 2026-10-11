@@ -47,6 +47,8 @@ func (s *OrderService) CreateOrder(req *models.CreateOrderRequest) (*models.Orde
 		CustomerName:    req.CustomerName,
 		CustomerPhone:   req.CustomerPhone,
 		DeliveryAddress: req.DeliveryAddress,
+		PickupLat:       req.PickupLat,
+		PickupLon:       req.PickupLon,
 		TotalAmount:     totalAmount,
 		Status:          models.OrderStatusCreated,
 		CreatedAt:       time.Now(),
@@ -54,11 +56,13 @@ func (s *OrderService) CreateOrder(req *models.CreateOrderRequest) (*models.Orde
 	}
 
 	query := `
-		INSERT INTO orders (id, customer_name, customer_phone, delivery_address, total_amount, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO orders (id, customer_name, customer_phone, delivery_address, pickup_lat, pickup_lon, total_amount, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	_, err = tx.Exec(query, order.ID, order.CustomerName, order.CustomerPhone,
-		order.DeliveryAddress, order.TotalAmount, order.Status, order.CreatedAt, order.UpdatedAt)
+		order.DeliveryAddress, order.PickupLat, order.PickupLon,
+		order.TotalAmount, order.Status, order.CreatedAt, order.UpdatedAt)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to create order: %w", err)
 	}
@@ -102,7 +106,7 @@ func (s *OrderService) GetOrder(orderID uuid.UUID) (*models.Order, error) {
 	order := &models.Order{}
 
 	query := `
-		SELECT id, customer_name, customer_phone, delivery_address, total_amount, 
+		SELECT id, customer_name, customer_phone, delivery_address, pickup_lat, pickup_lon, total_amount, 
 		       status, courier_id, created_at, updated_at, delivered_at
 		FROM orders 
 		WHERE id = $1
@@ -110,8 +114,8 @@ func (s *OrderService) GetOrder(orderID uuid.UUID) (*models.Order, error) {
 
 	err := s.db.QueryRow(query, orderID).Scan(
 		&order.ID, &order.CustomerName, &order.CustomerPhone, &order.DeliveryAddress,
-		&order.TotalAmount, &order.Status, &order.CourierID, &order.CreatedAt,
-		&order.UpdatedAt, &order.DeliveredAt,
+		&order.PickupLat, &order.PickupLon, &order.TotalAmount, &order.Status,
+		&order.CourierID, &order.CreatedAt, &order.UpdatedAt, &order.DeliveredAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -141,6 +145,11 @@ func (s *OrderService) GetOrder(orderID uuid.UUID) (*models.Order, error) {
 		order.Items = append(order.Items, item)
 	}
 
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
 	return order, nil
 }
 
@@ -148,7 +157,7 @@ func (s *OrderService) GetOrder(orderID uuid.UUID) (*models.Order, error) {
 func (s *OrderService) UpdateOrderStatus(orderID uuid.UUID, req *models.UpdateOrderStatusRequest) error {
 	query := `
 		UPDATE orders 
-		SET status = $1, courier_id = $2, updated_at = $3
+		SET status = $1, courier_id = COALESCE($2, courier_id), updated_at = $3
 	`
 	args := []interface{}{req.Status, req.CourierID, time.Now()}
 
@@ -189,8 +198,9 @@ func (s *OrderService) UpdateOrderStatus(orderID uuid.UUID, req *models.UpdateOr
 // GetOrders получает список заказов с фильтрацией
 func (s *OrderService) GetOrders(status *models.OrderStatus, courierID *uuid.UUID, limit, offset int) ([]*models.Order, error) {
 	query := `
-		SELECT id, customer_name, customer_phone, delivery_address, total_amount, 
-		       status, courier_id, created_at, updated_at, delivered_at
+		SELECT id, customer_name, customer_phone, delivery_address,
+			pickup_lat, pickup_lon, total_amount, 
+		    status, courier_id, created_at, updated_at, delivered_at
 		FROM orders 
 		WHERE 1=1
 	`
@@ -232,11 +242,16 @@ func (s *OrderService) GetOrders(status *models.OrderStatus, courierID *uuid.UUI
 	for rows.Next() {
 		order := &models.Order{}
 		if err := rows.Scan(&order.ID, &order.CustomerName, &order.CustomerPhone,
-			&order.DeliveryAddress, &order.TotalAmount, &order.Status,
+			&order.DeliveryAddress, &order.PickupLat, &order.PickupLon, &order.TotalAmount, &order.Status,
 			&order.CourierID, &order.CreatedAt, &order.UpdatedAt, &order.DeliveredAt); err != nil {
 			return nil, fmt.Errorf("failed to scan order: %w", err)
 		}
 		orders = append(orders, order)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
 	return orders, nil

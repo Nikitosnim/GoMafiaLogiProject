@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -18,19 +19,21 @@ import (
 
 // OrderHandler представляет обработчик заказов
 type OrderHandler struct {
-	orderService *services.OrderService
-	producer     *kafka.Producer
-	redisClient  *redis.Client
-	log          *logger.Logger
+	orderService      *services.OrderService
+	assignmentService *services.CourierAssignmentService
+	producer          *kafka.Producer
+	redisClient       *redis.Client
+	log               *logger.Logger
 }
 
 // NewOrderHandler создает новый обработчик заказов
-func NewOrderHandler(orderService *services.OrderService, producer *kafka.Producer, redisClient *redis.Client, log *logger.Logger) *OrderHandler {
+func NewOrderHandler(orderService *services.OrderService, assignmentService *services.CourierAssignmentService, producer *kafka.Producer, redisClient *redis.Client, log *logger.Logger) *OrderHandler {
 	return &OrderHandler{
-		orderService: orderService,
-		producer:     producer,
-		redisClient:  redisClient,
-		log:          log,
+		orderService:      orderService,
+		assignmentService: assignmentService,
+		producer:          producer,
+		redisClient:       redisClient,
+		log:               log,
 	}
 }
 
@@ -67,6 +70,32 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 		// Не возвращаем ошибку клиенту, так как заказ уже создан
 	}
 
+	var assignment *models.AutoAssignResult
+	var assignmentErr error
+	if req.AutoAssign {
+		assignment, assignmentErr = h.assignmentService.AutoAssignCourier(r.Context(), order.ID)
+		if assignmentErr != nil {
+			h.log.WithError(assignmentErr).Warn("Auto-assign failed on order creation")
+		} else {
+			courierID := assignment.CourierID
+			order.Status = models.OrderStatusAccepted
+			order.CourierID = &courierID
+
+			if err := h.producer.PublishCourierAssigned(order.ID, assignment.CourierID); err != nil {
+				h.log.WithError(err).Error("Failed to publish courier assigned event")
+			}
+			if err := h.producer.PublishOrderStatusChanged(order.ID, models.OrderStatusCreated, models.OrderStatusAccepted, &courierID); err != nil {
+				h.log.WithError(err).Error("Failed to publish order status changed event")
+			}
+
+			// Инвалидация кеша курьера (его статус изменился)
+			courierCacheKey := redis.GenerateKey(redis.KeyPrefixCourier, assignment.CourierID.String())
+			if err := h.redisClient.Delete(r.Context(), courierCacheKey); err != nil {
+				h.log.WithError(err).Error("Failed to invalidate courier cache")
+			}
+		}
+	}
+
 	// Кеширование заказа в Redis
 	cacheKey := redis.GenerateKey(redis.KeyPrefixOrder, order.ID.String())
 	if err := h.redisClient.Set(r.Context(), cacheKey, order, defaultCacheTTL); err != nil {
@@ -75,6 +104,19 @@ func (h *OrderHandler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.log.WithField("order_id", order.ID).Info("Order created successfully")
+
+	// При запросе автоназначения возвращаем расширенный ответ с решением
+	if req.AutoAssign {
+		response := map[string]interface{}{"order": order}
+		if assignment != nil {
+			response["auto_assign"] = assignment
+		} else if assignmentErr != nil {
+			response["auto_assign_error"] = assignmentErr.Error()
+		}
+		writeJSONResponse(w, http.StatusCreated, response)
+		return
+	}
+
 	writeJSONResponse(w, http.StatusCreated, order)
 }
 
@@ -176,6 +218,64 @@ func (h *OrderHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request)
 
 	h.log.WithField("order_id", orderID).WithField("new_status", req.Status).Info("Order status updated")
 	writeJSONResponse(w, http.StatusOK, map[string]string{"message": "Order status updated successfully"})
+}
+
+// AutoAssignCourier автоматически назначает оптимального курьера на заказ
+func (h *OrderHandler) AutoAssignCourier(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	orderID, err := extractUUIDFromPath(r.URL.Path, "/api/orders/")
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid order ID")
+		return
+	}
+
+	result, err := h.assignmentService.AutoAssignCourier(r.Context(), orderID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrAssignOrderNotFound):
+			writeErrorResponse(w, http.StatusNotFound, "Order not found")
+		case errors.Is(err, services.ErrAssignOrderNotEligible):
+			writeErrorResponse(w, http.StatusConflict, "Order is not in created status or already has a courier")
+		case errors.Is(err, services.ErrAssignNoPickupPoint):
+			writeErrorResponse(w, http.StatusBadRequest, "Order has no pickup coordinates and default pickup point is not configured")
+		case errors.Is(err, services.ErrAssignNoCouriers):
+			writeErrorResponse(w, http.StatusConflict, "No available couriers found")
+		default:
+			h.log.WithError(err).Error("Failed to auto-assign courier")
+			writeErrorResponse(w, http.StatusInternalServerError, "Failed to auto-assign courier")
+		}
+		return
+	}
+
+	// Публикация событий в Kafka
+	if err := h.producer.PublishCourierAssigned(orderID, result.CourierID); err != nil {
+		h.log.WithError(err).Error("Failed to publish courier assigned event")
+	}
+	courierID := result.CourierID
+	if err := h.producer.PublishOrderStatusChanged(orderID, models.OrderStatusCreated, models.OrderStatusAccepted, &courierID); err != nil {
+		h.log.WithError(err).Error("Failed to publish order status changed event")
+	}
+
+	// Инвалидация кешей заказа и курьера
+	orderCacheKey := redis.GenerateKey(redis.KeyPrefixOrder, orderID.String())
+	if err := h.redisClient.Delete(r.Context(), orderCacheKey); err != nil {
+		h.log.WithError(err).Error("Failed to invalidate order cache")
+	}
+	courierCacheKey := redis.GenerateKey(redis.KeyPrefixCourier, result.CourierID.String())
+	if err := h.redisClient.Delete(r.Context(), courierCacheKey); err != nil {
+		h.log.WithError(err).Error("Failed to invalidate courier cache")
+	}
+
+	h.log.WithField("order_id", orderID).
+		WithField("courier_id", result.CourierID).
+		WithField("reason", result.Reason).
+		Info("Courier auto-assigned")
+
+	writeJSONResponse(w, http.StatusOK, result)
 }
 
 // GetOrders получает список заказов с фильтрацией
@@ -295,6 +395,17 @@ func (h *OrderHandler) validateCreateOrderRequest(req *models.CreateOrderRequest
 		return fmt.Errorf("order items are required")
 	}
 
+	// Координаты точки получения: либо обе, либо ничего; валидные диапазоны
+	if (req.PickupLat == nil) != (req.PickupLon == nil) {
+		return fmt.Errorf("pickup_lat and pickup_lon must be provided together")
+	}
+	if req.PickupLat != nil && (*req.PickupLat < -90 || *req.PickupLat > 90) {
+		return fmt.Errorf("pickup_lat must be between -90 and 90")
+	}
+	if req.PickupLon != nil && (*req.PickupLon < -180 || *req.PickupLon > 180) {
+		return fmt.Errorf("pickup_lon must be between -180 and 180")
+	}
+	
 	for i, item := range req.Items {
 		if item.Name == "" {
 			return fmt.Errorf("item %d: name is required", i+1)

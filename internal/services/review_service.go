@@ -113,5 +113,10 @@ func (s *CourierService) GetCourierReviews(ctx context.Context, courierID uuid.U
 		reviews = append(reviews, r)
 	}
 
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
 	return reviews, nil
 }

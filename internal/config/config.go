@@ -8,11 +8,25 @@ import (
 
 // Config представляет конфигурацию приложения
 type Config struct {
-	Server   ServerConfig   `json:"server"`
-	Database DatabaseConfig `json:"database"`
-	Redis    RedisConfig    `json:"redis"`
-	Kafka    KafkaConfig    `json:"kafka"`
-	Logger   LoggerConfig   `json:"logger"`
+	Server     ServerConfig     `json:"server"`
+	Database   DatabaseConfig   `json:"database"`
+	Redis      RedisConfig      `json:"redis"`
+	Kafka      KafkaConfig      `json:"kafka"`
+	Logger     LoggerConfig     `json:"logger"`
+	Assignment AssignmentConfig `json:"assignment"`
+}
+
+// AssignmentConfig представляет конфигурацию алгоритма автоназначения курьеров
+type AssignmentConfig struct {
+	DistanceWeight   float64 `json:"distance_weight"`   // вес расстояния (по умолчанию 0.4)
+	RatingWeight     float64 `json:"rating_weight"`     // вес рейтинга (по умолчанию 0.3)
+	WorkloadWeight   float64 `json:"workload_weight"`   // вес загруженности (по умолчанию 0.3)
+	MaxDistanceKm    float64 `json:"max_distance_km"`   // радиус нормализации: за его пределами оценка расстояния = 0
+	MaxActiveOrders  int     `json:"max_active_orders"` // максимум активных заказов у курьера
+	LocationStaleMin int     `json:"location_stale_minutes"`
+	DefaultPickupLat float64 `json:"default_pickup_lat"`
+	DefaultPickupLon float64 `json:"default_pickup_lon"`
+	HasDefaultPickup bool    `json:"has_default_pickup"`
 }
 
 // ServerConfig представляет конфигурацию HTTP сервера
@@ -98,6 +112,17 @@ func Load() *Config {
 			Level:  getEnv("LOG_LEVEL", "info"),
 			Format: getEnv("LOG_FORMAT", "json"),
 			File:   getEnv("LOG_FILE", ""),
+		}, 
+		Assignment: AssignmentConfig{
+			DistanceWeight:   getEnvAsFloat("ASSIGN_WEIGHT_DISTANCE", 0.4),
+			RatingWeight:     getEnvAsFloat("ASSIGN_WEIGHT_RATING", 0.3),
+			WorkloadWeight:   getEnvAsFloat("ASSIGN_WEIGHT_LOAD", 0.3),
+			MaxDistanceKm:    getEnvAsFloat("ASSIGN_MAX_DISTANCE_KM", 10),
+			MaxActiveOrders:  getEnvAsInt("ASSIGN_MAX_ACTIVE_ORDERS", 2),
+			LocationStaleMin: getEnvAsInt("ASSIGN_LOCATION_STALE_MINUTES", 15),
+			DefaultPickupLat: getEnvAsFloat("ASSIGN_PICKUP_DEFAULT_LAT", 0),
+			DefaultPickupLon: getEnvAsFloat("ASSIGN_PICKUP_DEFAULT_LON", 0),
+			HasDefaultPickup: getEnv("ASSIGN_PICKUP_DEFAULT_LAT", "") != "" && getEnv("ASSIGN_PICKUP_DEFAULT_LON", "") != "",
 		},
 	}
 }
@@ -114,6 +139,15 @@ func getEnv(key, defaultValue string) string {
 func getEnvAsInt(key string, defaultValue int) int {
 	valueStr := getEnv(key, "")
 	if value, err := strconv.Atoi(valueStr); err == nil {
+		return value
+	}
+	return defaultValue
+}
+
+// getEnvAsFloat получает значение переменной окружения как float64 с значением по умолчанию
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	valueStr := getEnv(key, "")
+	if value, err := strconv.ParseFloat(valueStr, 64); err == nil {
 		return value
 	}
 	return defaultValue

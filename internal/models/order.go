@@ -25,6 +25,8 @@ type Order struct {
 	CustomerName    string      `json:"customer_name" db:"customer_name"`
 	CustomerPhone   string      `json:"customer_phone" db:"customer_phone"`
 	DeliveryAddress string      `json:"delivery_address" db:"delivery_address"`
+	PickupLat       *float64    `json:"pickup_lat,omitempty" db:"pickup_lat"`
+	PickupLon       *float64    `json:"pickup_lon,omitempty" db:"pickup_lon"`
 	Items           []OrderItem `json:"items"`
 	TotalAmount     float64     `json:"total_amount" db:"total_amount"`
 	Status          OrderStatus `json:"status" db:"status"`
@@ -48,6 +50,9 @@ type CreateOrderRequest struct {
 	CustomerName    string                   `json:"customer_name"`
 	CustomerPhone   string                   `json:"customer_phone"`
 	DeliveryAddress string                   `json:"delivery_address"`
+	PickupLat       *float64                 `json:"pickup_lat,omitempty"`
+	PickupLon       *float64                 `json:"pickup_lon,omitempty"`
+	AutoAssign      bool                     `json:"auto_assign,omitempty"`
 	Items           []CreateOrderItemRequest `json:"items"`
 }
 

@@ -6,7 +6,6 @@ toolchain go1.24.1
 
 require (
 	github.com/IBM/sarama v1.45.2
-	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.3.1
 	github.com/lib/pq v1.10.9

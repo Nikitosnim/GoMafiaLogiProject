@@ -59,9 +59,10 @@ func main() {
 	// Инициализация сервисов
 	orderService := services.NewOrderService(db, log)
 	courierService := services.NewCourierService(db, log)
+	assignmentService := services.NewCourierAssignmentService(db, &cfg.Assignment, log)
 
 	// Инициализация handlers
-	orderHandler := handlers.NewOrderHandler(orderService, producer, redisClient, log)
+	orderHandler := handlers.NewOrderHandler(orderService, assignmentService, producer, redisClient, log)
 	courierHandler := handlers.NewCourierHandler(courierService, producer, redisClient, log)
 	healthHandler := handlers.NewHealthHandler(db, redisClient)
 
@@ -159,6 +160,13 @@ func handleOrderRoute(handler *handlers.OrderHandler) http.HandlerFunc {
 			// Создание отзыва о доставке заказа
 			if r.Method == http.MethodPost {
 				handler.PostOrderReview(w, r)
+			} else {
+				writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
+			}
+		} else if strings.HasSuffix(r.URL.Path, "/auto-assign") {
+			// Автоматическое назначение оптимального курьера
+			if r.Method == http.MethodPost {
+				handler.AutoAssignCourier(w, r)
 			} else {
 				writeErrorResponse(w, http.StatusMethodNotAllowed, "Method not allowed")
 			}

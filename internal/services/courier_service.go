@@ -88,7 +88,7 @@ func (s *CourierService) GetCourier(courierID uuid.UUID) (*models.Courier, error
 func (s *CourierService) UpdateCourierStatus(courierID uuid.UUID, req *models.UpdateCourierStatusRequest) error {
 	query := `
 		UPDATE couriers 
-		SET status = $1, current_lat = $2, current_lon = $3, updated_at = $4, last_seen_at = $5
+		SET status = $1, current_lat = COALESCE($2, current_lat), current_lon = COALESCE($3, current_lon), updated_at = $4, last_seen_at = $5
 		WHERE id = $6
 	`
 
